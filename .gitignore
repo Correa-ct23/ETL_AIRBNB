@@ -1,3 +1,17 @@
+<<<<<<< HEAD
+# Archivos pesados de datos
+docs/*.csv
+
+# Otros posibles archivos grandes
+*.csv
+=======
+.env*
+>>>>>>> feature--Exraction-class
+
+# Ignorar archivos de entorno y logs
+.env*
+logs/
+
 # Archivos pesados de datos
 docs/*.csv
 
