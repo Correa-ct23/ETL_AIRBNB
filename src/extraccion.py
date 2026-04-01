@@ -16,6 +16,13 @@ from __future__ import annotations
 import logging
 import os
 from typing import Dict, Optional
+from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
 
 try:
     import pandas as pd
@@ -58,18 +65,22 @@ class Extraccion:
         self,
         uri: str = "mongodb://localhost:27017",
         db_name: Optional[str] = None,
-        log_path: str = "logs/logs.txt",
+        log_path: Optional[str] = None,
         **mongo_kwargs,
     ) -> None:
         self.uri = uri
         self.db_name = db_name
-        self.log_path = log_path
+        if log_path:
+            self.log_path = log_path
+        else:
+            project_root = Path(__file__).resolve().parent.parent
+            self.log_path = str(project_root / "logs" / "logs.txt")
         self.mongo_kwargs = mongo_kwargs
         self.client: Optional[MongoClient] = None
         self.db = None
 
         # configurar logger
-        os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
+        Path(self.log_path).parent.mkdir(parents=True, exist_ok=True)
         self.logger = logging.getLogger("Extraccion")
         self.logger.setLevel(logging.INFO)
         # evitar múltiples handlers si se instancia varias veces
@@ -90,7 +101,7 @@ class Extraccion:
 
         try:
             self.client = MongoClient(self.uri, **self.mongo_kwargs)
-            # Force a server selection to raise early if connection fails
+            # Forzar selección del servidor para detectar fallos de conexión inmediatamente
             self.client.admin.command("ping")
             if self.db_name:
                 self.db = self.client[self.db_name]
@@ -98,10 +109,10 @@ class Extraccion:
                 # si no hay db_name, usar la base por defecto si existe
                 self.db = self.client.get_default_database()
 
-            self.logger.info(f"Connected to MongoDB: {self.uri} DB: {self.db_name}")
+            self.logger.info(f"Conectado a MongoDB: {self.uri} BD: {self.db_name}")
             return self.db
         except PyMongoError as exc:
-            self.logger.exception(f"Error connecting to MongoDB: {exc}")
+            self.logger.exception(f"Error conectando a MongoDB: {exc}")
             raise
 
     def list_collections(self) -> list:
@@ -122,7 +133,7 @@ class Extraccion:
         docs = list(cursor)
         df = pd.DataFrame(docs)
         count = len(df)
-        self.logger.info(f"Extracted {count} records from collection '{collection}'")
+        self.logger.info(f"Extraídos {count} registros de la colección '{collection}'")
         return df
 
     def extract_all(self, query: Optional[dict] = None) -> Dict[str, "pd.DataFrame"]:
@@ -146,9 +157,9 @@ class Extraccion:
         if self.client:
             try:
                 self.client.close()
-                self.logger.info("Closed MongoDB connection")
+                self.logger.info("Conexión a MongoDB cerrada")
             except Exception:
-                self.logger.exception("Error closing MongoDB connection")
+                self.logger.exception("Error cerrando la conexión a MongoDB")
             finally:
                 self.client = None
 
@@ -163,9 +174,20 @@ if __name__ == "__main__":
     import os
     import sys
 
-    # Valores por defecto: intenta conectar a localhost y extraer conteos
-    uri = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
+    # Valores por defecto: carga desde .env (si existe) y construye URI si es necesario
     db_name = os.environ.get("MONGO_DB", None)
+    uri = os.environ.get("MONGO_URI")
+    if not uri:
+        user = os.environ.get("MONGO_USER")
+        pwd = os.environ.get("MONGO_PWD")
+        host = os.environ.get("MONGO_HOST", "localhost:27017")
+        auth = os.environ.get("MONGO_AUTH")
+        if user and pwd and db_name:
+            uri = f"mongodb://{user}:{pwd}@{host}/{db_name}"
+            if auth:
+                uri = uri + f"?authSource={auth}"
+        else:
+            uri = "mongodb://localhost:27017"
 
     ext = Extraccion(uri=uri, db_name=db_name)
     try:
