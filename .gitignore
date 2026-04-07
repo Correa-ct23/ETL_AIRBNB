@@ -1,12 +1,27 @@
-<<<<<<<<< Temporary merge branch 1
+#.env files
 .env*
-=========
-# Archivos pesados de datos
-docs/*.csv
-__pycache__
-exports
-.venv
 
-# Otros posibles archivos grandes
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Project data and exports
+data/
+exports/
+docs/*.csv
+
+# Excel / CSV outputs
 *.csv
->>>>>>>>> Temporary merge branch 2
+
+# Logs
+logs/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
