@@ -1,0 +1,5 @@
+2026-04-01 08:18:37,057 - INFO - Conectado a MongoDB: mongodb://AIRBNB:12345@localhost:27017/airbnb?authSource=ETL_AIRBNB BD: ETL_AIRBNB
+2026-04-01 08:18:45,353 - INFO - Extraídos 1042702 registros de la colección 'reviews'
+2026-04-01 08:19:41,183 - INFO - Extraídos 9982072 registros de la colección 'calendar'
+2026-04-01 08:19:43,712 - INFO - Extraídos 27348 registros de la colección 'listings'
+2026-04-01 08:19:45,060 - INFO - Conexión a MongoDB cerrada
