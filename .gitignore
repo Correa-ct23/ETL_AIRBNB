@@ -1,5 +1,0 @@
-# Archivos pesados de datos
-docs/*.csv
-
-# Otros posibles archivos grandes
-*.csv
