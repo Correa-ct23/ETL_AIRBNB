@@ -47,7 +47,7 @@ class Extraccion:
         Nombre de la base de datos a usar. Si es `None`, se usará la
         base de datos por defecto del cliente (si aplica) o se lanzará
         excepción al intentar acceder.
-    log_path: str
+    log_path: strF
         Ruta al fichero de log donde se registrarán conexiones y conteos.
     mongo_kwargs: dict
         Argumentos adicionales para `pymongo.MongoClient`.

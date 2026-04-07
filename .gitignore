@@ -1,19 +1,10 @@
-<<<<<<< HEAD
+<<<<<<<<< Temporary merge branch 1
+.env*
+=========
 # Archivos pesados de datos
 docs/*.csv
+__pycache__
 
 # Otros posibles archivos grandes
 *.csv
-=======
-.env*
->>>>>>> feature--Exraction-class
-
-# Ignorar archivos de entorno y logs
-.env*
-logs/
-
-# Archivos pesados de datos
-docs/*.csv
-
-# Otros posibles archivos grandes
-*.csv
+>>>>>>>>> Temporary merge branch 2
