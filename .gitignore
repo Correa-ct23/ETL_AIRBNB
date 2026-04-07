@@ -4,6 +4,8 @@
 # Archivos pesados de datos
 docs/*.csv
 __pycache__
+exports
+.venv
 
 # Otros posibles archivos grandes
 *.csv
