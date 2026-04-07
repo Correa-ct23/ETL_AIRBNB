@@ -605,3 +605,60 @@ Traceback (most recent call last):
   File "C:\Users\Camilo\Desktop\Inteligencia trabajos\ETL_AIRBNB\.venv\Lib\site-packages\openpyxl\worksheet\worksheet.py", line 257, in _get_cell
     raise ValueError(f"Row numbers must be between 1 and 1048576. Row number supplied was {row}")
 ValueError: Row numbers must be between 1 and 1048576. Row number supplied was 1048577
+2026-04-06 21:13:02,620 - INFO - Conectado a MongoDB: mongodb://localhost:27017?directConnection=true BD: ETL_AIRBNB
+2026-04-06 21:13:10,366 - INFO - Extraídos 1042702 registros de la colección 'reviews'
+2026-04-06 21:14:16,325 - INFO - Extraídos 9982072 registros de la colección 'calendar'
+2026-04-06 21:14:18,732 - INFO - Extraídos 27348 registros de la colección 'listings'
+2026-04-06 21:14:18,801 - INFO - Conexión a MongoDB cerrada
+2026-04-06 21:14:19,038 - INFO - ============================================================
+2026-04-06 21:14:19,038 - INFO - INICIO del proceso de transformación
+2026-04-06 21:14:19,038 - INFO - ============================================================
+2026-04-06 21:14:19,038 - INFO - [reviews] Registros iniciales: 1042702
+2026-04-06 21:14:19,038 - INFO - [calendar] Registros iniciales: 9982072
+2026-04-06 21:14:19,038 - INFO - [listings] Registros iniciales: 27348
+2026-04-06 21:14:19,038 - INFO - ----------------------------------------
+2026-04-06 21:14:19,038 - INFO - Paso 1: Limpieza de nulos y duplicados
+2026-04-06 21:14:22,172 - INFO - [reviews] Sin duplicados (1042702 registros)
+2026-04-06 21:14:22,455 - WARNING - [reviews] Columnas con nulos -> reviewer_name: 1
+2026-04-06 21:14:51,326 - INFO - [calendar] Sin duplicados (9982072 registros)
+2026-04-06 21:14:51,726 - INFO - [calendar] Sin valores nulos
+2026-04-06 21:14:52,342 - INFO - [listings] Sin duplicados (27348 registros)
+2026-04-06 21:14:52,404 - WARNING - [listings] Columnas con nulos -> description: 596, picture_url: 1, bathrooms: 8, bathrooms_text: 11, bedrooms: 60, beds: 8, minimum_nights: 106, maximum_nights: 106, minimum_minimum_nights: 106, maximum_minimum_nights: 106, minimum_maximum_nights: 106, maximum_maximum_nights: 106, has_availability: 204, host_location: 5783, first_review: 3303, last_review: 3303, review_scores_rating: 3303, review_scores_accuracy: 3304, review_scores_cleanliness: 3303, review_scores_checkin: 3303, review_scores_communication: 3303, review_scores_location: 3303, review_scores_value: 3303, reviews_per_month: 3303, host_about: 11783, license: 26886
+2026-04-06 21:14:52,427 - INFO - ----------------------------------------
+2026-04-06 21:14:52,427 - INFO - Paso 2: Normalización de precios
+2026-04-06 21:14:52,428 - INFO - [listings] Precios normalizados en columnas: []
+2026-04-06 21:14:52,428 - INFO - [calendar] Precios normalizados en columnas: []
+2026-04-06 21:14:52,428 - INFO - ----------------------------------------
+2026-04-06 21:14:52,428 - INFO - Paso 3: Conversión de fechas
+2026-04-06 21:14:52,436 - INFO - [reviews] Columna 'date' convertida a datetime
+2026-04-06 21:14:52,477 - INFO - [calendar] Columna 'date' convertida a datetime
+2026-04-06 21:14:52,483 - INFO - [listings] Columna 'last_scraped' convertida a datetime
+2026-04-06 21:14:52,486 - INFO - [listings] Columna 'first_review' convertida a datetime
+2026-04-06 21:14:52,490 - INFO - [listings] Columna 'last_review' convertida a datetime
+2026-04-06 21:14:52,490 - INFO - ----------------------------------------
+2026-04-06 21:14:52,490 - INFO - Paso 4: Derivación de variables temporales
+2026-04-06 21:14:52,577 - INFO - [reviews] Variables derivadas creadas: anio, mes, dia, trimestre
+2026-04-06 21:14:53,188 - INFO - [calendar] Variables derivadas creadas: anio, mes, dia, trimestre
+2026-04-06 21:14:53,188 - INFO - ----------------------------------------
+2026-04-06 21:14:53,188 - INFO - Paso 5: Categorización de precios por rangos
+2026-04-06 21:14:53,188 - INFO - ----------------------------------------
+2026-04-06 21:14:53,188 - INFO - Paso 6: Expansión de campos anidados
+2026-04-06 21:14:53,189 - INFO - [reviews] Columna '_id' eliminada
+2026-04-06 21:14:53,306 - INFO - [calendar] Columna '_id' eliminada
+2026-04-06 21:14:53,307 - INFO - [listings] Columna '_id' eliminada
+2026-04-06 21:14:53,316 - INFO - [listings] Campo 'amenities' procesado -> 'amenities_count'
+2026-04-06 21:14:53,337 - INFO - [listings] Campo 'host_verifications' procesado -> 'host_verifications_count'
+2026-04-06 21:14:53,337 - INFO - ============================================================
+2026-04-06 21:14:53,337 - INFO - FIN del proceso de transformación
+2026-04-06 21:14:53,337 - INFO - [reviews] Registros finales: 1042702
+2026-04-06 21:14:53,337 - INFO - [calendar] Registros finales: 9982072
+2026-04-06 21:14:53,337 - INFO - [listings] Registros finales: 27348
+2026-04-06 21:14:53,337 - INFO - ============================================================
+2026-04-06 21:14:53,564 - INFO - INICIO del proceso de carga
+2026-04-06 21:14:53,564 - INFO - Guardando 3 tablas en SQLite: C:\Users\Camilo\Desktop\Inteligencia trabajos\ETL_AIRBNB\data\airbnb.db
+2026-04-06 21:14:53,565 - INFO -   - Escribiendo tabla 'reviews' (1042702 registros)
+2026-04-06 21:15:00,338 - INFO -   - Escribiendo tabla 'calendar' (9982072 registros)
+2026-04-06 21:15:22,867 - INFO -   - Escribiendo tabla 'listings' (27348 registros)
+2026-04-06 21:15:23,171 - INFO -     - Columnas serializadas a JSON para SQLite: ['amenities']
+2026-04-06 21:15:23,910 - INFO - Guardado en SQLite completado
+2026-04-06 21:15:23,929 - INFO - Exportando todas las tablas a un libro XLSX: C:\Users\Camilo\Desktop\Inteligencia trabajos\ETL_AIRBNB\exports\transformed.xlsx
