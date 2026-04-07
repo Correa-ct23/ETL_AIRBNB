@@ -63,13 +63,17 @@ class Extraccion:
 
     def __init__(
         self,
-        uri: str = "mongodb://localhost:27017",
+        uri: Optional[str] = None,
         db_name: Optional[str] = None,
         log_path: Optional[str] = None,
         **mongo_kwargs,
     ) -> None:
-        self.uri = uri
-        self.db_name = db_name
+        # Prefer explicit uri, then environment, then sensible default
+        env_uri = os.environ.get("MONGO_URI")
+        self.uri = uri or env_uri or "mongodb://localhost:27017"
+
+        # Prefer explicit db_name, then environment, then the project default
+        self.db_name = db_name or os.environ.get("MONGO_DB") or "ETL_AIRBNB"
         if log_path:
             self.log_path = log_path
         else:
@@ -100,7 +104,15 @@ class Extraccion:
             return self.db
 
         try:
-            self.client = MongoClient(self.uri, **self.mongo_kwargs)
+            # Ensure directConnection is set unless already provided in kwargs or URI
+            kwargs = dict(self.mongo_kwargs or {})
+            if (
+                "directConnection" not in kwargs
+                and "directConnection=" not in (self.uri or "")
+            ):
+                kwargs["directConnection"] = True
+
+            self.client = MongoClient(self.uri, **kwargs)
             # Forzar selección del servidor para detectar fallos de conexión inmediatamente
             self.client.admin.command("ping")
             if self.db_name:
@@ -136,12 +148,37 @@ class Extraccion:
         self.logger.info(f"Extraídos {count} registros de la colección '{collection}'")
         return df
 
-    def extract_all(self, query: Optional[dict] = None) -> Dict[str, "pd.DataFrame"]:
-        """Extrae todas las colecciones y devuelve un diccionario de DataFrames.
+    def extract_all(
+        self, query: Optional[dict] = None, allowed_collections: Optional[list] = None
+    ) -> Dict[str, "pd.DataFrame"]:
+        """Extrae colecciones y devuelve un diccionario de DataFrames.
 
-        Parámetro opcional `query` se aplica a cada extracción.
+        - Si `allowed_collections` se pasa, solo extrae esas colecciones (lista de nombres).
+        - Si no se pasa, intenta leer la variable de entorno `MONGO_COLLS` (coma-separada).
+        - Si no hay `MONGO_COLLS`, intenta leer `src/collections.json` en el paquete.
+        - Si ninguno aparece, extrae todas las colecciones de la base de datos.
         """
+        # determinar lista blanca de colecciones si no fue pasada
+        if allowed_collections is None:
+            env = os.environ.get("MONGO_COLLS")
+            if env:
+                allowed_collections = [c.strip() for c in env.split(",") if c.strip()]
+            else:
+                try:
+                    cfg_path = Path(__file__).resolve().parent / "collections.json"
+                    if cfg_path.exists():
+                        import json
+
+                        with cfg_path.open(encoding="utf-8") as fh:
+                            allowed_collections = json.load(fh)
+                except Exception:
+                    allowed_collections = None
+
         cols = self.list_collections()
+        # filtrar si hay lista permitida
+        if allowed_collections:
+            cols = [c for c in cols if c in allowed_collections]
+
         result: Dict[str, pd.DataFrame] = {}
         for c in cols:
             try:
@@ -174,20 +211,10 @@ if __name__ == "__main__":
     import os
     import sys
 
-    # Valores por defecto: carga desde .env (si existe) y construye URI si es necesario
-    db_name = os.environ.get("MONGO_DB", None)
-    uri = os.environ.get("MONGO_URI")
-    if not uri:
-        user = os.environ.get("MONGO_USER")
-        pwd = os.environ.get("MONGO_PWD")
-        host = os.environ.get("MONGO_HOST", "localhost:27017")
-        auth = os.environ.get("MONGO_AUTH")
-        if user and pwd and db_name:
-            uri = f"mongodb://{user}:{pwd}@{host}/{db_name}"
-            if auth:
-                uri = uri + f"?authSource={auth}"
-        else:
-            uri = "mongodb://localhost:27017"
+    # Valores por defecto: carga desde .env (si existe).
+    # Use MONGO_URI y MONGO_DB si están presentes, sino caen a valores por defecto.
+    db_name = os.environ.get("MONGO_DB", "ETL_AIRBNB")
+    uri = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
 
     ext = Extraccion(uri=uri, db_name=db_name)
     try:
