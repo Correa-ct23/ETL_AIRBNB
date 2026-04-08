@@ -18,7 +18,6 @@ Uso mínimo:
 """
 from __future__ import annotations
 
-import logging
 import re
 import json
 from pathlib import Path
@@ -26,6 +25,8 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 import numpy as np
+
+from .logger import setup_logger
 
 
 class Transformacion:
@@ -41,8 +42,6 @@ class Transformacion:
     dataframes : dict[str, pd.DataFrame]
         Diccionario con los DataFrames extraídos.
         Claves esperadas: 'listings', 'reviews', 'calendar'.
-    log_path : str | None
-        Ruta del fichero de log. Si es None se usa logs/logs.txt del proyecto.
     """
 
     # Rangos de precio por defecto (límite superior exclusivo, excepto el último)
@@ -52,29 +51,14 @@ class Transformacion:
     def __init__(
         self,
         dataframes: Dict[str, pd.DataFrame],
-        log_path: Optional[str] = None,
     ) -> None:
         # Copiar DataFrames para no alterar los originales
         self.dataframes: Dict[str, pd.DataFrame] = {
             k: v.copy() for k, v in dataframes.items()
         }
-        # Ruta del log
-        if log_path:
-            self.log_path = log_path
-        else:
-            project_root = Path(__file__).resolve().parent.parent
-            self.log_path = str(project_root / "logs" / "logs.log")
 
         # Configurar logger
-        Path(self.log_path).parent.mkdir(parents=True, exist_ok=True)
-        self.logger = logging.getLogger("Transformacion")
-        self.logger.setLevel(logging.INFO)
-        if not self.logger.handlers:
-            fh = logging.FileHandler(self.log_path, encoding="utf-8")
-            fh.setLevel(logging.INFO)
-            fmt = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-            fh.setFormatter(fmt)
-            self.logger.addHandler(fh)
+        self.logger = setup_logger("Transformacion")
 
     # ------------------------------------------------------------------
     # Métodos auxiliares
