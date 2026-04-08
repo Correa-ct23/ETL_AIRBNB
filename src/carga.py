@@ -1,331 +1,394 @@
-"""
-carga.py
-
-Clase `Carga` para insertar DataFrames transformados en SQLite,
-exportarlos a XLSX, verificar cargas y registrar eventos en logs.
-
-Uso mínimo:
-    from carga import Carga
-    c = Carga(dfs)
-    resultado = c.run_all()
-
-"""
-from __future__ import annotations
-
+import os
+import time
 import logging
-import json
-import re
-from pathlib import Path
-from typing import Dict, Optional
 import sqlite3
+from typing import Optional, List, Tuple
+
+from pathlib import Path
 import pandas as pd
+import json
+import datetime
+import re
+import numpy as np
 
 
 class Carga:
-    """Carga de datos transformados.
+    """Clase para cargar datos transformados rápidamente.
 
-    Parámetros
-    ----------
-    dataframes: dict[str, pd.DataFrame]
-        Diccionario con los DataFrames transformados (p.ej. 'listings', 'reviews', 'calendar').
-    sqlite_path: str | Path | None
-        Ruta al archivo SQLite donde crear tablas. Por defecto: project_root/data/airbnb.db
-    xlsx_dir: str | Path | None
-        Carpeta donde exportar archivos XLSX. Por defecto: project_root/exports
-    log_path: str | None
-        Ruta del fichero de log (si None usa logs/logs.txt del proyecto).
+    Funcionalidades:
+    - insertar DataFrame en SQLite de forma eficiente (batch + PRAGMA tuning)
+    - exportar a uno o varios archivos XLSX
+    - verificar conteo de registros cargados
+    - registrar eventos principales en logs
     """
 
-    def __init__(
-        self,
-        dataframes: Dict[str, pd.DataFrame],
-        sqlite_path: Optional[str] = None,
-        xlsx_dir: Optional[str] = None,
-        log_path: Optional[str] = None,
-    ) -> None:
-        self.dataframes = {k: v.copy() for k, v in dataframes.items()}
-
-        project_root = Path(__file__).resolve().parent.parent
-        self.sqlite_path = Path(sqlite_path) if sqlite_path else project_root / "data" / "airbnb.db"
-        self.xlsx_dir = Path(xlsx_dir) if xlsx_dir else project_root / "exports"
-
-        if log_path:
-            self.log_path = Path(log_path)
-        else:
-            self.log_path = project_root / "logs" / "logs.txt"
-
-        # asegurar directorios
-        self.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
-        self.xlsx_dir.mkdir(parents=True, exist_ok=True)
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # logger
+    def __init__(self, log_path: Optional[str] = None, log_level: int = logging.INFO):
+        # Default to centralized logs/logs.log at project root
+        if not log_path:
+            project_root = Path(__file__).resolve().parent.parent
+            log_path = str(project_root / "logs" / "logs.log")
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
         self.logger = logging.getLogger("Carga")
-        self.logger.setLevel(logging.INFO)
         if not self.logger.handlers:
-            fh = logging.FileHandler(self.log_path, encoding="utf-8")
-            fh.setLevel(logging.INFO)
-            fmt = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-            fh.setFormatter(fmt)
+            formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+            fh = logging.FileHandler(log_path, encoding="utf-8")
+            fh.setFormatter(formatter)
             self.logger.addHandler(fh)
+            sh = logging.StreamHandler()
+            sh.setFormatter(formatter)
+            self.logger.addHandler(sh)
+        self.logger.setLevel(log_level)
 
-    def save_to_sqlite(self, if_exists: str = "replace") -> None:
-        """Inserta todos los DataFrames en SQLite como tablas.
+    def _map_dtype(self, dtype) -> str:
+        kind = getattr(dtype, "kind", "O")
+        if kind in ("i",):
+            return "INTEGER"
+        if kind in ("f",):
+            return "REAL"
+        if kind in ("b",):
+            return "INTEGER"
+        if kind in ("M",):
+            return "TEXT"
+        return "TEXT"
 
-        - `if_exists` se pasa a `DataFrame.to_sql` (replace/append).
+    def _create_table_if_not_exists(self, conn: sqlite3.Connection, table: str, df: pd.DataFrame):
+        cols = []
+        for c, dt in zip(df.columns, df.dtypes):
+            sql_type = self._map_dtype(dt)
+            cols.append(f'"{c}" {sql_type}')
+        ddl = f"CREATE TABLE IF NOT EXISTS \"{table}\" ({', '.join(cols)})"
+        conn.execute(ddl)
+
+    def _pythonize_value(self, x):
+        """Convierte valores de pandas/numpy a tipos compatibles con sqlite3.
+
+        - NaN/NaT/None -> None
+        - Timestamp/datetime/date/numpy datetime -> ISO string
+        - numpy scalars -> Python scalars
+        - lists/dicts/ndarray -> JSON string
+        - otros -> se devuelve tal cual
         """
-        self.logger.info(f"Guardando {len(self.dataframes)} tablas en SQLite: {self.sqlite_path}")
-        conn = sqlite3.connect(self.sqlite_path)
+        # manejar nulos primero
         try:
-            for name, df in self.dataframes.items():
-                self.logger.info(f"  - Escribiendo tabla '{name}' ({len(df)} registros)")
-                # SQLite (sqlite3) no soporta tipos como list/dict en binding; serializamos
-                # columnas que contengan listas o diccionarios a JSON strings.
-                df_to_write = df.copy()
-                cols_converted = []
-                for col in df_to_write.columns:
-                    try:
-                        sample = df_to_write[col].dropna().iloc[0]
-                    except Exception:
-                        sample = None
-                    if isinstance(sample, (list, dict)):
-                        cols_converted.append(col)
-                        df_to_write[col] = df_to_write[col].apply(
-                            lambda x: json.dumps(x, ensure_ascii=False, sort_keys=True) if x is not None else None
-                        )
-
-                if cols_converted:
-                    self.logger.info(f"    - Columnas serializadas a JSON para SQLite: {cols_converted}")
-
-                # to_sql maneja tipos pandas -> sqlite
-                df_to_write.to_sql(name, conn, if_exists=if_exists, index=False)
-            conn.commit()
-            self.logger.info("Guardado en SQLite completado")
-        except Exception as exc:
-            conn.rollback()
-            self.logger.exception(f"Error guardando en SQLite: {exc}")
-            raise
-        finally:
-            conn.close()
-
-    def export_to_xlsx(self, per_table_files: bool = False, filename: Optional[str] = None) -> None:
-        """Exporta los DataFrames a XLSX.
-
-        - Si `per_table_files` es False (por defecto), crea un solo libro con una hoja por tabla.
-        - Si True, crea un archivo por cada tabla en `xlsx_dir/{table}.xlsx`.
-        - `filename` permite definir el nombre del libro principal (si no se pasa: 'transformed.xlsx').
-        """
-        # helper: sanitize and convert unsupported types for Excel cells
-        def _prepare_cell(val):
-            if val is None:
+            if pd.isna(x):
                 return None
-            # convert lists/dicts to JSON strings
-            if isinstance(val, (list, dict)):
-                try:
-                    s = json.dumps(val, ensure_ascii=False, sort_keys=True)
-                except Exception:
-                    s = str(val)
-                # remove illegal xml chars
-                return re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", s)
-            # bytes -> decode
-            if isinstance(val, (bytes, bytearray)):
-                try:
-                    val = val.decode("utf-8", errors="ignore")
-                except Exception:
-                    val = str(val)
-            # strings: remove control chars invalid for Excel XML
-            if isinstance(val, str):
-                return re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", val)
-            # other types (int,float,bool,datetime,...) are fine
-            return val
-
-        if per_table_files:
-            for name, df in self.dataframes.items():
-                # Excel limit: 1,048,576 rows. Reserve 1 row for header to avoid overflow.
-                excel_max_rows = 1048576
-                chunk_rows = excel_max_rows - 1
-                total = len(df)
-                if total == 0:
-                    self.logger.info(f"Skipping empty table {name}")
-                    continue
-
-                if total <= chunk_rows:
-                    out = self.xlsx_dir / f"{name}.xlsx"
-                    self.logger.info(f"Exportando '{name}' a {out}")
-                    try:
-                        df_to_write = df.copy()
-                        # apply sanitization column-wise
-                        for col in df_to_write.columns:
-                            try:
-                                df_to_write[col] = df_to_write[col].apply(_prepare_cell)
-                            except Exception:
-                                df_to_write[col] = df_to_write[col].astype(str).apply(
-                                    lambda v: re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", v)
-                                )
-                        df_to_write.to_excel(out, sheet_name=name[:31], index=False)
-                    except Exception:
-                        self.logger.exception(f"Fallo exportando {name} a XLSX")
-                        raise
-                else:
-                    # split into multiple files using safe chunk size (leave room for header)
-                    parts = (total + chunk_rows - 1) // chunk_rows
-                    for i in range(parts):
-                        start = i * chunk_rows
-                        end = min((i + 1) * chunk_rows, total)
-                        out = self.xlsx_dir / f"{name}_part{i+1}.xlsx"
-                        self.logger.info(f"Exportando chunk {i+1}/{parts} de '{name}' a {out} rows {start}-{end}")
-                        try:
-                            df_chunk = df.iloc[start:end].copy()
-                            for col in df_chunk.columns:
-                                try:
-                                    df_chunk[col] = df_chunk[col].apply(_prepare_cell)
-                                except Exception:
-                                    df_chunk[col] = df_chunk[col].astype(str).apply(
-                                        lambda v: re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", v)
-                                    )
-                            df_chunk.to_excel(out, sheet_name=(name + f"_p{i+1}")[:31], index=False)
-                        except Exception:
-                            self.logger.exception(f"Fallo exportando chunk {i+1} de {name} a XLSX")
-                            raise
-            self.logger.info("Exportación a archivos XLSX por tabla completada")
-            return
-
-        # Un solo libro con múltiples hojas
-        out_file = self.xlsx_dir / (filename or "transformed.xlsx")
-        self.logger.info(f"Exportando todas las tablas a un libro XLSX: {out_file}")
-        try:
-            written_any = False
-            with pd.ExcelWriter(out_file, engine="openpyxl") as writer:
-                for name, df in self.dataframes.items():
-                    total = len(df)
-                    if total == 0:
-                        continue
-                    excel_max_rows = 1048576
-                    chunk_rows = excel_max_rows - 1
-                    if total <= chunk_rows:
-                        sheet = name[:31]
-                        df_to_write = df.copy()
-                        # sanitize column-wise
-                        for col in df_to_write.columns:
-                            try:
-                                df_to_write[col] = df_to_write[col].apply(_prepare_cell)
-                            except Exception:
-                                df_to_write[col] = df_to_write[col].astype(str).apply(
-                                    lambda v: re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", v)
-                                )
-                        df_to_write.to_excel(writer, sheet_name=sheet, index=False)
-                        written_any = True
-                    else:
-                        parts = (total + chunk_rows - 1) // chunk_rows
-                        for i in range(parts):
-                            start = i * chunk_rows
-                            end = min((i + 1) * chunk_rows, total)
-                            sheet = (name + f"_p{i+1}")[:31]
-                            df_chunk = df.iloc[start:end].copy()
-                            for col in df_chunk.columns:
-                                try:
-                                    df_chunk[col] = df_chunk[col].apply(_prepare_cell)
-                                except Exception:
-                                    df_chunk[col] = df_chunk[col].astype(str).apply(
-                                        lambda v: re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", v)
-                                    )
-                            df_chunk.to_excel(writer, sheet_name=sheet, index=False)
-                            written_any = True
-
-                # ensure at least one visible sheet exists
-                if not written_any:
-                    import pandas as _pd
-
-                    _pd.DataFrame({"info": ["no tables to export"]}).to_excel(writer, sheet_name="sheet1", index=False)
-
-            self.logger.info("Exportación a XLSX completada")
         except Exception:
-            self.logger.exception("Fallo exportando a XLSX")
-            raise
+            # pd.isna puede devolver arrays para estructuras complejas
+            pass
 
-    def verify_load(self) -> Dict[str, bool]:
-        """Verifica que las cantidades en SQLite coincidan con los DataFrames.
+        # pandas Timestamp / datetime
+        if isinstance(x, (pd.Timestamp, datetime.datetime, datetime.date)):
+            try:
+                return x.isoformat()
+            except Exception:
+                return str(x)
 
-        Retorna dict[table] = True/False si coinciden.
+        # numpy datetime
+        if isinstance(x, np.datetime64):
+            try:
+                return pd.to_datetime(x).isoformat()
+            except Exception:
+                return str(x)
+
+        # numpy scalar types
+        if isinstance(x, (np.integer,)):
+            return int(x)
+        if isinstance(x, (np.floating,)):
+            return float(x)
+        if isinstance(x, (np.bool_,)):
+            return bool(x)
+
+        # lists, tuples, dicts, numpy arrays -> JSON
+        if isinstance(x, (list, tuple, dict, np.ndarray)):
+            try:
+                return json.dumps(x, default=str, ensure_ascii=False)
+            except Exception:
+                return str(x)
+
+        return x
+
+    def insert_into_sqlite(self, df: pd.DataFrame, db_path: str = "datos.db", table: str = "datos",
+                           batch_size: int = 10000) -> int:
+        """Inserta `df` en SQLite de forma eficiente.
+
+        Retorna el número de registros insertados.
         """
-        self.logger.info("Verificando registros cargados en SQLite...")
-        results: Dict[str, bool] = {}
-        conn = sqlite3.connect(self.sqlite_path)
+        start = time.time()
+        os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+
+        if df is None or df.shape[0] == 0:
+            self.logger.info("DataFrame vacío: nada que insertar.")
+            return 0
+
+        conn = sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES)
         try:
-            cur = conn.cursor()
-            for name, df in self.dataframes.items():
-                try:
-                    cur.execute(f"SELECT COUNT(*) FROM '{name}'")
-                    count = cur.fetchone()[0]
-                    ok = int(count) == int(len(df))
-                    results[name] = ok
-                    if ok:
-                        self.logger.info(f"Verificado '{name}': {count} registros (OK)")
-                    else:
-                        self.logger.warning(
-                            f"Verificado '{name}': sqlite={count} vs dataframe={len(df)} (MISMATCH)"
-                        )
-                except Exception:
-                    self.logger.exception(f"Error verificando tabla '{name}' en SQLite")
-                    results[name] = False
+            # Speedups
+            conn.execute("PRAGMA synchronous = OFF")
+            conn.execute("PRAGMA journal_mode = MEMORY")
+            conn.execute("PRAGMA temp_store = MEMORY")
+
+            self._create_table_if_not_exists(conn, table, df)
+
+            cols = [f'"{c}"' for c in df.columns]
+            placeholders = ",".join(["?" for _ in cols])
+            sql = f"INSERT INTO \"{table}\" ({', '.join(cols)}) VALUES ({placeholders})"
+
+            total = 0
+            conn.execute("BEGIN")
+            it = df.itertuples(index=False, name=None)
+            batch = []
+            for row in it:
+                # convertir cada valor a tipos Python/JSON compatibles
+                vals = tuple(self._pythonize_value(x) for x in row)
+                batch.append(vals)
+                if len(batch) >= batch_size:
+                    conn.executemany(sql, batch)
+                    total += len(batch)
+                    batch.clear()
+            if batch:
+                conn.executemany(sql, batch)
+                total += len(batch)
+            conn.commit()
+            elapsed = time.time() - start
+            self.logger.info(f"Insertados {total} registros en {db_path}:{table} en {elapsed:.2f}s")
+            return total
+        except Exception:
+            conn.rollback()
+            self.logger.exception("Error durante la inserción a SQLite")
+            raise
         finally:
             conn.close()
-        return results
 
-    def run_all(self, if_exists: str = "replace", per_table_files: bool = False, filename: Optional[str] = None) -> Dict[str, bool]:
-        """Ejecuta pipeline completo: guardar en SQLite, exportar a XLSX y verificar.
+    def export_to_xlsx(self, df: pd.DataFrame, output_path: str = "output.xlsx",
+                       rows_per_file: Optional[int] = None, sheet_name: str = "Sheet1") -> List[str]:
+        """Exporta el DataFrame a uno o varios archivos XLSX.
 
-        Devuelve el resultado de `verify_load()`.
+        Si `rows_per_file` se proporciona, dividirá el DataFrame en múltiples archivos.
+        Retorna la lista de paths escritos.
         """
-        self.logger.info("INICIO del proceso de carga")
-        self.save_to_sqlite(if_exists=if_exists)
-        self.export_to_xlsx(per_table_files=per_table_files, filename=filename)
-        results = self.verify_load()
-        self.logger.info("FIN del proceso de carga")
+        start = time.time()
+        if df is None or df.shape[0] == 0:
+            self.logger.info("DataFrame vacío: nada que exportar a XLSX.")
+            return []
+
+        # Sanitizar el DataFrame para evitar caracteres ilegales en Excel
+        def _sanitize_df_for_excel(df_in: pd.DataFrame) -> pd.DataFrame:
+            df2 = df_in.copy()
+            illegal = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+
+            for col in df2.columns:
+                # Objetos/strings
+                if df2[col].dtype == object:
+                    def _clean(x):
+                        # Primero tratar colecciones/arrays/dicts
+                        if isinstance(x, (list, tuple, dict, np.ndarray)):
+                            try:
+                                s = json.dumps(x, ensure_ascii=False)
+                            except Exception:
+                                s = str(x)
+                            return illegal.sub("", s)
+
+                        # Nulos escalares
+                        try:
+                            if pd.isna(x):
+                                return None
+                        except Exception:
+                            # pd.isna puede devolver arrays para estructuras complejas
+                            pass
+
+                        # Finalmente convertir a string y eliminar chars ilegales
+                        s = str(x)
+                        return illegal.sub("", s)
+
+                    df2[col] = df2[col].map(_clean)
+                # datetimes -> iso strings
+                elif pd.api.types.is_datetime64_any_dtype(df2[col]):
+                    df2[col] = df2[col].apply(lambda x: x.isoformat() if pd.notna(x) else None)
+                else:
+                    # convertir numpy scalars a python nativos
+                    df2[col] = df2[col].apply(lambda x: self._pythonize_value(x))
+
+            return df2
+
+        df_safe = _sanitize_df_for_excel(df)
+
+        # Excel limits
+        MAX_EXCEL_ROWS = 1_048_576
+        # Si el DataFrame excede el límite y no se pidió división explícita,
+        # se activa división automática por el tamaño máximo de hoja.
+        if rows_per_file is None and len(df_safe) > MAX_EXCEL_ROWS:
+            self.logger.warning(
+                f"DataFrame con {len(df_safe)} filas excede límite de Excel ({MAX_EXCEL_ROWS}). Dividiendo automáticamente."
+            )
+            rows_per_file = MAX_EXCEL_ROWS
+
+        outputs: List[str] = []
+        try:
+            if rows_per_file is None or rows_per_file >= len(df_safe):
+                os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+                engine = "xlsxwriter"
+                try:
+                    with pd.ExcelWriter(output_path, engine=engine) as writer:
+                        df_safe.to_excel(writer, index=False, sheet_name=sheet_name)
+                except Exception:
+                    # fallback a openpyxl
+                    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+                        df_safe.to_excel(writer, index=False, sheet_name=sheet_name)
+                outputs.append(output_path)
+                elapsed = time.time() - start
+                self.logger.info(f"Exportado {len(df_safe)} filas a {output_path} en {elapsed:.2f}s")
+                return outputs
+
+            # Split into multiple sheets in the same workbook
+            n = len(df_safe)
+            parts = (n + rows_per_file - 1) // rows_per_file
+            base_dir = os.path.dirname(output_path) or "."
+            os.makedirs(base_dir, exist_ok=True)
+            out = output_path
+            engine = "xlsxwriter"
+            try:
+                with pd.ExcelWriter(out, engine=engine) as writer:
+                    for i in range(parts):
+                        start_row = i * rows_per_file
+                        end_row = min((i + 1) * rows_per_file, n)
+                        part_df = df_safe.iloc[start_row:end_row]
+                        # Sheet names must be <=31 chars
+                        sheet = sheet_name if i == 0 else f"{sheet_name}_part{i+1}"
+                        if len(sheet) > 31:
+                            sheet = sheet[:28] + f"_{i+1}"
+                        part_df.to_excel(writer, index=False, sheet_name=sheet)
+                        self.logger.info(f"Exportado filas {start_row}:{end_row} a hoja '{sheet}' in {out}")
+                outputs.append(out)
+            except Exception:
+                # Fallback to openpyxl
+                with pd.ExcelWriter(out, engine="openpyxl") as writer:
+                    for i in range(parts):
+                        start_row = i * rows_per_file
+                        end_row = min((i + 1) * rows_per_file, n)
+                        part_df = df_safe.iloc[start_row:end_row]
+                        sheet = sheet_name if i == 0 else f"{sheet_name}_part{i+1}"
+                        if len(sheet) > 31:
+                            sheet = sheet[:28] + f"_{i+1}"
+                        part_df.to_excel(writer, index=False, sheet_name=sheet)
+                        self.logger.info(f"Exportado filas {start_row}:{end_row} a hoja '{sheet}' in {out}")
+                outputs.append(out)
+
+            elapsed = time.time() - start
+            self.logger.info(f"Exportación completa en {elapsed:.2f}s ({len(outputs)} archivos) -> {out} con {parts} sheets")
+            return outputs
+        except Exception:
+            self.logger.exception("Error durante exportación a XLSX")
+            raise
+
+    def verify_load(self, db_path: str = "datos.db", table: str = "datos", expected_count: Optional[int] = None) -> Tuple[int, bool]:
+        """Verifica el número de registros cargados en la tabla.
+
+        Retorna una tupla: (conteo_en_db, coincide_con_expected_o_None).
+        """
+        try:
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute(f"SELECT COUNT(*) FROM \"{table}\"")
+            (count,) = cur.fetchone()
+            ok = (expected_count is None) or (count == expected_count)
+            self.logger.info(f"Verificación: {count} registros en {db_path}:{table} (esperado={expected_count}) -> ok={ok}")
+            return count, ok
+        except Exception:
+            self.logger.exception("Error durante verificación de carga")
+            raise
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+    def load_from_dict(
+        self,
+        dataframes: dict,
+        db_path: str = "datos.db",
+        xlsx_dir: str = "output",
+        batch_size: int = 10000,
+        rows_per_file: Optional[int] = None,
+        export_xlsx: bool = True,
+    ) -> dict:
+        """Carga todos los DataFrames del dict en SQLite y opcionalmente los exporta a XLSX.
+
+        Parámetros
+        - dataframes: dict[name] = pd.DataFrame
+        - db_path: ruta a la base SQLite
+        - xlsx_dir: directorio donde escribir archivos XLSX (por colección)
+        - batch_size: tamaño de lote para inserciones
+        - rows_per_file: si se establece, parte la exportación en múltiples archivos
+        - export_xlsx: si False, no exporta XLSX
+
+        Retorna un dict con resultados por colección: {name: {"inserted": int, "xlsx_files": [...], "verify": (count, ok)}}
+        """
+        results = {}
+        os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+        if export_xlsx:
+            os.makedirs(xlsx_dir, exist_ok=True)
+
+        for name, df in dataframes.items():
+            try:
+                self.logger.info(f"Iniciando carga para colección: {name}")
+                inserted = self.insert_into_sqlite(df, db_path=db_path, table=name, batch_size=batch_size)
+                xlsx_files = []
+                if export_xlsx:
+                    out_path = os.path.join(xlsx_dir, f"{name}.xlsx")
+                    xlsx_files = self.export_to_xlsx(df, output_path=out_path, rows_per_file=rows_per_file)
+                verify = self.verify_load(db_path=db_path, table=name, expected_count=len(df))
+                results[name] = {"inserted": inserted, "xlsx_files": xlsx_files, "verify": verify}
+            except Exception:
+                self.logger.exception(f"Fallo cargando colección {name}")
+                results[name] = {"inserted": 0, "xlsx_files": [], "verify": (0, False)}
+
         return results
 
 
 if __name__ == "__main__":
-    # Ejecutable: extrae, transforma y carga usando variables de entorno o args
-    import argparse
-    import os
+    # Orquestador: Extrae desde Mongo, transforma y carga.
     import sys
+    from pathlib import Path
 
-    parser = argparse.ArgumentParser(description="Ejecuta pipeline: Extraccion->Transformacion->Carga")
-    parser.add_argument("--mongo-uri", default=os.environ.get("MONGO_URI", "mongodb://localhost:27017?directConnection=true"), help="Mongo URI")
-    parser.add_argument("--mongo-db", default=os.environ.get("MONGO_DB", "ETL_AIRBNB"), help="Mongo DB name")
-    parser.add_argument("--sqlite-path", default=None, help="Ruta al archivo sqlite de salida")
-    parser.add_argument("--xlsx-dir", default=None, help="Directorio de salida para XLSX")
-    parser.add_argument("--per-table", action="store_true", help="Exportar un archivo XLSX por cada colección")
-    args = parser.parse_args()
+    # Añadir carpeta src al path para imports locales
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-    print("Extrayendo datos de MongoDB...")
-    # importar Extraccion/Transformacion intentando ambas formas (ejecución desde /src o desde project root)
     try:
         from extraccion import Extraccion
         from transformacion import Transformacion
     except Exception:
-        try:
-            from src.extraccion import Extraccion
-            from src.transformacion import Transformacion
-        except Exception as exc:
-            print("No se pudo importar los módulos de extracción/transformación:", exc)
-            sys.exit(1)
+        print("No se pueden importar Extraccion/Transformacion. Asegúrese de ejecutar desde el proyecto.")
+        raise
 
-    ext = Extraccion(uri=args.mongo_uri, db_name=args.mongo_db)
-    try:
-        dfs = ext.extract_all()
-    finally:
-        ext.close()
+    # Configuración básica (leer .env o variables de entorno)
+    db_name = os.environ.get("MONGO_DB", "ETL_AIRBNB")
+    uri = os.environ.get("MONGO_URI")
+    if not uri:
+        user = os.environ.get("MONGO_USER", "AIRBNB")
+        pwd = os.environ.get("MONGO_PWD", "12345")  # noqa: S105
+        host = os.environ.get("MONGO_HOST", "localhost:27017")
+        auth = os.environ.get("MONGO_AUTH", "ETL_AIRBNB")
+        uri = f"mongodb://{user}:{pwd}@{host}/{db_name}?authSource={auth}"
 
-    for name, df in dfs.items():
-        print(f"  {name}: {len(df)} registros, {len(df.columns) if not df.empty else 0} columnas")
+    print("Extrayendo datos de MongoDB...")
+    ext = Extraccion(uri=uri, db_name=db_name)
+    dfs = ext.extract_all()
+    ext.close()
 
-    print("\nTransformando datos...")
+    print("Transformando datos...")
     tr = Transformacion(dfs)
-    dfs_t = tr.transformar_todo()
+    resultado = tr.transformar_todo()
 
-    print("\nCargando y exportando datos...")
-    c = Carga(dfs_t, sqlite_path=args.sqlite_path, xlsx_dir=args.xlsx_dir, log_path=None)
-    results = c.run_all(per_table_files=args.per_table)
-    print("Verificación de carga:", results)
+    print("Cargando datos transformados (SQLite + XLSX)...")
+    c = Carga()
+    db_out = os.environ.get("OUTPUT_DB", "datos_transformados.db")
+    out_dir = os.environ.get("OUTPUT_XLSX_DIR", str(Path(__file__).resolve().parent.parent / "output"))
+    inicio = time.time()
+    report = c.load_from_dict(resultado, db_path=db_out, xlsx_dir=out_dir, batch_size=10000, rows_per_file=None)
+    total_time = time.time() - inicio
+
+    print("Resumen de carga:")
+    for name, info in report.items():
+        print(f" - {name}: inserted={info['inserted']} verify={info['verify']} xlsx_files={len(info['xlsx_files'])}")
+    print(f"Tiempo total de carga: {total_time:.2f}s")

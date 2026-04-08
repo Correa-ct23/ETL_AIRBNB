@@ -3,4 +3,4 @@ pandas
 pymongo
 numpy
 openpyxl
-XlsxWriter
+xlsxwriter

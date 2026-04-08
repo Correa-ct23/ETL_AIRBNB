@@ -78,7 +78,7 @@ class Extraccion:
             self.log_path = log_path
         else:
             project_root = Path(__file__).resolve().parent.parent
-            self.log_path = str(project_root / "logs" / "logs.txt")
+            self.log_path = str(project_root / "logs" / "logs.log")
         self.mongo_kwargs = mongo_kwargs
         self.client: Optional[MongoClient] = None
         self.db = None
