@@ -63,7 +63,7 @@ class Transformacion:
             self.log_path = log_path
         else:
             project_root = Path(__file__).resolve().parent.parent
-            self.log_path = str(project_root / "logs" / "logs.txt")
+            self.log_path = str(project_root / "logs" / "logs.log")
 
         # Configurar logger
         Path(self.log_path).parent.mkdir(parents=True, exist_ok=True)
