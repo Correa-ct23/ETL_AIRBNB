@@ -13,7 +13,6 @@ Uso mínimo:
 """
 from __future__ import annotations
 
-import logging
 import os
 from typing import Dict, Optional
 from pathlib import Path
@@ -35,6 +34,8 @@ try:
 except Exception as e:  # pragma: no cover - environment dependent
     raise ImportError("pymongo is required to use Extraccion: pip install pymongo") from e
 
+from .logger import setup_logger
+
 
 class Extraccion:
     """Clase para extracción de datos desde MongoDB a pandas.DataFrame.
@@ -47,8 +48,6 @@ class Extraccion:
         Nombre de la base de datos a usar. Si es `None`, se usará la
         base de datos por defecto del cliente (si aplica) o se lanzará
         excepción al intentar acceder.
-    log_path: strF
-        Ruta al fichero de log donde se registrarán conexiones y conteos.
     mongo_kwargs: dict
         Argumentos adicionales para `pymongo.MongoClient`.
 
@@ -65,7 +64,6 @@ class Extraccion:
         self,
         uri: Optional[str] = None,
         db_name: Optional[str] = None,
-        log_path: Optional[str] = None,
         **mongo_kwargs,
     ) -> None:
         # Prefer explicit uri, then environment, then sensible default
@@ -74,26 +72,12 @@ class Extraccion:
 
         # Prefer explicit db_name, then environment, then the project default
         self.db_name = db_name or os.environ.get("MONGO_DB") or "ETL_AIRBNB"
-        if log_path:
-            self.log_path = log_path
-        else:
-            project_root = Path(__file__).resolve().parent.parent
-            self.log_path = str(project_root / "logs" / "logs.log")
         self.mongo_kwargs = mongo_kwargs
         self.client: Optional[MongoClient] = None
         self.db = None
 
         # configurar logger
-        Path(self.log_path).parent.mkdir(parents=True, exist_ok=True)
-        self.logger = logging.getLogger("Extraccion")
-        self.logger.setLevel(logging.INFO)
-        # evitar múltiples handlers si se instancia varias veces
-        if not self.logger.handlers:
-            fh = logging.FileHandler(self.log_path, encoding="utf-8")
-            fh.setLevel(logging.INFO)
-            formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-            fh.setFormatter(formatter)
-            self.logger.addHandler(fh)
+        self.logger = setup_logger("Extraccion")
 
     def connect(self):
         """Establece conexión con MongoDB y selecciona la base de datos.

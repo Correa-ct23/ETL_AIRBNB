@@ -11,6 +11,8 @@ import datetime
 import re
 import numpy as np
 
+from .logger import setup_logger
+
 
 class Carga:
     """Clase para cargar datos transformados rápidamente.
@@ -22,22 +24,8 @@ class Carga:
     - registrar eventos principales en logs
     """
 
-    def __init__(self, log_path: Optional[str] = None, log_level: int = logging.INFO):
-        # Default to centralized logs/logs.log at project root
-        if not log_path:
-            project_root = Path(__file__).resolve().parent.parent
-            log_path = str(project_root / "logs" / "logs.log")
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        self.logger = logging.getLogger("Carga")
-        if not self.logger.handlers:
-            formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-            fh = logging.FileHandler(log_path, encoding="utf-8")
-            fh.setFormatter(formatter)
-            self.logger.addHandler(fh)
-            sh = logging.StreamHandler()
-            sh.setFormatter(formatter)
-            self.logger.addHandler(sh)
-        self.logger.setLevel(log_level)
+    def __init__(self, log_level: int = logging.INFO):
+        self.logger = setup_logger("Carga", log_level)
 
     def _map_dtype(self, dtype) -> str:
         kind = getattr(dtype, "kind", "O")
