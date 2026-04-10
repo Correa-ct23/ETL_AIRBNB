@@ -16,7 +16,7 @@ def main():
     
     # Carga
     carga = Carga()
-    carga.cargar_sqlite(dfs_transformados, 'airbnb_analitico.db')
+    carga.load_from_dict(dfs_transformados, db_path='airbnb_analitico.db')
     
     print("Proceso ETL completado exitosamente!")
 
