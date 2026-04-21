@@ -118,18 +118,65 @@ class Extraccion:
         db = self.connect()
         return db.list_collection_names()
 
-    def extract_collection(self, collection: str, query: Optional[dict] = None) -> "pd.DataFrame":
+    def extract_collection(
+        self,
+        collection: str,
+        query: Optional[dict] = None,
+        max_records: Optional[int] = None,
+    ) -> "pd.DataFrame":
         """Extrae una colección y retorna un `pandas.DataFrame`.
 
         También registra en el log la cantidad de documentos extraídos.
+
+        Parámetros
+        ---------
+        max_records : int | None
+            Si se pasa, limita la cantidad de documentos extraídos (útil para
+            muestrear colecciones muy grandes como `calendar`). Si es `None`, no
+            hay límite salvo el que imponga la consulta.
         """
         db = self.connect()
         q = query or {}
+
+        # Determinar límite efectivo: prioridad al parámetro, luego variable de
+        # entorno CALENDAR_MAX (si collection == 'calendar'), luego sin límite.
+        effective_max = max_records
+        if effective_max is None and collection == "calendar":
+            try:
+                env_max = os.environ.get("CALENDAR_MAX")
+                if env_max:
+                    effective_max = int(env_max)
+                else:
+                    effective_max = 200_000
+            except Exception:
+                effective_max = 200_000
+
+        # Ejecutar la consulta aplicando limit si corresponde
         cursor = db[collection].find(q)
+        if effective_max is not None:
+            try:
+                cursor = cursor.limit(effective_max)
+            except Exception:
+                # Algunos cursores u ORMs podrían no soportar .limit(); en ese
+                # caso materializamos y luego cortamos en memoria.
+                docs = list(cursor)
+                docs = docs[:effective_max]
+                df = pd.DataFrame(docs)
+                count = len(df)
+                self.logger.info(
+                    f"Extraídos {count} registros de la colección '{collection}' (limitado a {effective_max})"
+                )
+                return df
+
         docs = list(cursor)
         df = pd.DataFrame(docs)
         count = len(df)
-        self.logger.info(f"Extraídos {count} registros de la colección '{collection}'")
+        if effective_max is not None and count >= effective_max:
+            self.logger.info(
+                f"Extraídos {count} registros de la colección '{collection}' (limitado a {effective_max})"
+            )
+        else:
+            self.logger.info(f"Extraídos {count} registros de la colección '{collection}'")
         return df
 
     def extract_all(
